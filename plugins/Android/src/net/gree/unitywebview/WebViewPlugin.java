@@ -24,17 +24,22 @@ package net.gree.unitywebview;
 import com.unity3d.player.UnityPlayer;
 import android.app.Activity;
 import android.os.Bundle;
+import android.os.Build;
 import android.os.SystemClock;
 import android.util.Log;
 import android.view.Gravity;
 import android.view.MotionEvent;
 import android.view.View;
 import android.view.ViewGroup.LayoutParams;
+import android.content.Context;
 import android.webkit.WebChromeClient;
 import android.webkit.WebSettings;
 import android.webkit.WebView;
 import android.webkit.WebViewClient;
 import android.widget.FrameLayout;
+import android.webkit.JavascriptInterface;
+import android.content.Intent;
+import android.net.Uri;
 
 class WebViewPluginInterface
 {
@@ -45,6 +50,7 @@ class WebViewPluginInterface
 		mGameObject = gameObject;
 	}
 
+	@JavascriptInterface
 	public void call(String message)
 	{
 		UnityPlayer.UnitySendMessage(mGameObject, "CallFromJS", message);
@@ -83,17 +89,63 @@ public class WebViewPlugin
 				LayoutParams.FILL_PARENT, LayoutParams.FILL_PARENT,
 				Gravity.NO_GRAVITY));
 
-			mWebView.setWebChromeClient(new WebChromeClient());
-			mWebView.setWebViewClient(new WebViewClient());
+			mWebView.setWebChromeClient(new WebChromeClient() {
+				public boolean onConsoleMessage(android.webkit.ConsoleMessage cm) {
+					Log.d("Webview", cm.message());
+					return true;
+				}
+			});
+			mWebView.setWebViewClient(new WebViewClient() {
+				@Override
+				public boolean shouldOverrideUrlLoading(WebView view, String url) {
+					if (url.startsWith("http://") || url.startsWith("https://") || 
+							url.startsWith("file://") || url.startsWith("javascript:")) {
+						// Let webview handle the URL
+						return false;
+					}
+					Intent intent = new Intent(Intent.ACTION_VIEW, Uri.parse(url));
+					view.getContext().startActivity(intent);
+					return true;
+				}
+			});
 			mWebView.addJavascriptInterface(
 				new WebViewPluginInterface(gameObject), "Unity");
 
 			WebSettings webSettings = mWebView.getSettings();
 			webSettings.setSupportZoom(false);
 			webSettings.setJavaScriptEnabled(true);
-			webSettings.setPluginsEnabled(true);
+			if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.JELLY_BEAN) {
+				Log.i("WebViewPlugin", "Build.VERSION.SDK_INT = " + Build.VERSION.SDK_INT);
+				webSettings.setAllowUniversalAccessFromFileURLs(true);
+			}
+			webSettings.setRenderPriority(WebSettings.RenderPriority.HIGH);
+			webSettings.setCacheMode(WebSettings.LOAD_NO_CACHE);
+
+			String databasePath = mWebView.getContext().getDir("databases", Context.MODE_PRIVATE).getPath(); 
+	        webSettings.setDatabaseEnabled(true);
+	        webSettings.setDomStorageEnabled(true);
+			webSettings.setDatabasePath(databasePath); 
 
 		}});
+
+		final View activityRootView = a.getWindow().getDecorView().getRootView();
+		activityRootView.getViewTreeObserver().addOnGlobalLayoutListener(new android.view.ViewTreeObserver.OnGlobalLayoutListener() {
+		@Override
+		public void onGlobalLayout() {
+				android.graphics.Rect r = new android.graphics.Rect();
+				//r will be populated with the coordinates of your view that area still visible.
+				activityRootView.getWindowVisibleDisplayFrame(r);
+				android.view.Display display = a.getWindowManager().getDefaultDisplay();
+				int screenHeight = display.getHeight();
+				int heightDiff = activityRootView.getRootView().getHeight() - (r.bottom - r.top);
+				//System.out.print(String.format("[NativeWebview] %d, %d\n", screenHeight, heightDiff));
+				if (heightDiff > screenHeight/3) { // assume that this means that the keyboard is on
+					UnityPlayer.UnitySendMessage(gameObject, "SetKeyboardVisible", "true");
+				} else {
+					UnityPlayer.UnitySendMessage(gameObject, "SetKeyboardVisible", "false");
+				}
+			}
+		}); 
 	}
 
 	public void Destroy()
